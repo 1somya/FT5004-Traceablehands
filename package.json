@@ -19,7 +19,7 @@
   },
   "homepage": "https://github.com/1somya/FT5004-Traceablehands#readme",
   "devDependencies": {
-    "@nomicfoundation/hardhat-toolbox": "^7.0.0",
+    "@nomicfoundation/hardhat-toolbox": "^6.1.2",
     "hardhat": "^2.22.2"
   },
   "dependencies": {
