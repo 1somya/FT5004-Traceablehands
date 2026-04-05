@@ -246,7 +246,7 @@ contract TraceableHands is ReentrancyGuard {
         } else if (vendorRep >= 2) {
             votesNeeded = 2; // Some track record
         } else {
-            votesNeeded = 3; // New vendor, need more oversight
+            votesNeeded = 1; // New vendor, need more oversight
         }
 
         // Create the Milestone struct and store it in our mapping.
