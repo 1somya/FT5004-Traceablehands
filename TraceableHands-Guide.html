@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TraceableHands — Developer & User Guide</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 14px;
+    line-height: 1.7;
+    color: #1e293b;
+    background: #fff;
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 2.5rem 2rem;
+  }
+  @media print {
+    body { padding: 1rem; font-size: 12px; }
+    .no-print { display: none; }
+    h1 { page-break-before: avoid; }
+    h2 { page-break-after: avoid; }
+    .box, pre { page-break-inside: avoid; }
+  }
+
+  /* Cover */
+  .cover {
+    background: linear-gradient(135deg, #312e81 0%, #4f46e5 50%, #7c3aed 100%);
+    color: #fff;
+    border-radius: 16px;
+    padding: 3rem 2.5rem;
+    margin-bottom: 2.5rem;
+    text-align: center;
+  }
+  .cover h1 { font-size: 2.2rem; font-weight: 800; letter-spacing: -1px; margin-bottom: 0.5rem; }
+  .cover .subtitle { font-size: 1rem; color: #c7d2fe; margin-bottom: 1.5rem; }
+  .cover .meta { font-size: 13px; color: #a5b4fc; line-height: 2; }
+  .cover .tagline { display: inline-block; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.25); border-radius: 8px; padding: 0.4rem 1rem; font-size: 13px; font-weight: 500; margin-bottom: 1.5rem; }
+
+  /* TOC */
+  .toc { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.5rem 2rem; margin-bottom: 2.5rem; }
+  .toc h3 { font-size: 14px; color: #64748b; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; margin-bottom: 1rem; }
+  .toc ol { padding-left: 1.25rem; }
+  .toc li { margin-bottom: 0.3rem; }
+  .toc a { color: #4f46e5; text-decoration: none; font-weight: 500; }
+
+  /* Headings */
+  h2 {
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: #1e1b4b;
+    margin: 2.5rem 0 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 3px solid #e0e7ff;
+  }
+  h3 { font-size: 1.05rem; font-weight: 600; color: #312e81; margin: 1.5rem 0 0.6rem; }
+  h4 { font-size: 0.95rem; font-weight: 600; color: #374151; margin: 1rem 0 0.4rem; }
+
+  p { margin-bottom: 0.75rem; color: #374151; }
+  ul, ol { padding-left: 1.4rem; margin-bottom: 0.75rem; }
+  li { margin-bottom: 0.3rem; }
+  strong { color: #1e1b4b; }
+
+  /* Code blocks */
+  pre {
+    background: #1e1b4b;
+    color: #a5b4fc;
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    overflow-x: auto;
+    font-size: 13px;
+    margin: 0.75rem 0 1rem;
+    font-family: 'Courier New', Consolas, monospace;
+    line-height: 1.6;
+  }
+  code {
+    background: #e0e7ff;
+    color: #3730a3;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-family: 'Courier New', Consolas, monospace;
+    font-size: 12px;
+  }
+  pre code { background: none; color: inherit; padding: 0; font-size: inherit; }
+
+  /* Boxes */
+  .box { border-radius: 10px; padding: 1rem 1.25rem; margin: 0.75rem 0 1rem; font-size: 13px; line-height: 1.7; }
+  .box.warn    { background: #fffbeb; border: 1px solid #fcd34d; color: #78350f; }
+  .box.info    { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; }
+  .box.success { background: #f0fdf4; border: 1px solid #86efac; color: #166534; }
+  .box.danger  { background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; }
+  .box p { margin: 0; color: inherit; }
+
+  /* Steps */
+  .step-grid { display: grid; grid-template-columns: 28px 1fr; gap: 0.5rem 0.75rem; margin: 0.75rem 0; align-items: start; }
+  .step-num { width: 28px; height: 28px; background: linear-gradient(135deg, #4f46e5, #7c3aed); color: #fff; border-radius: 50%; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+  .step-body { padding-bottom: 0.5rem; }
+  .step-body p { margin: 0; }
+
+  /* Table */
+  table { width: 100%; border-collapse: collapse; margin: 0.75rem 0 1rem; font-size: 13px; }
+  th { background: #1e1b4b; color: #e0e7ff; padding: 0.6rem 0.85rem; text-align: left; font-weight: 600; }
+  td { padding: 0.55rem 0.85rem; border-bottom: 1px solid #f1f5f9; }
+  tr:nth-child(even) td { background: #f8fafc; }
+
+  /* Divider */
+  hr { border: none; border-top: 2px solid #e2e8f0; margin: 2rem 0; }
+
+  /* Print button */
+  .print-btn {
+    position: fixed; bottom: 1.5rem; right: 1.5rem;
+    background: linear-gradient(135deg, #4f46e5, #7c3aed);
+    color: #fff; border: none; border-radius: 10px;
+    padding: 0.75rem 1.5rem; font-size: 14px; font-weight: 600;
+    cursor: pointer; box-shadow: 0 4px 16px rgba(79,70,229,0.4);
+  }
+</style>
+</head>
+<body>
+
+<button class="print-btn no-print" onclick="window.print()">Save as PDF</button>
+
+<!-- Cover -->
+<div class="cover">
+  <div style="font-size:3rem;margin-bottom:0.75rem;">🤝</div>
+  <h1>TraceableHands</h1>
+  <p class="subtitle">Developer &amp; User Guide</p>
+  <span class="tagline">Donate. Track. Know.</span>
+  <div class="meta">
+    FT5004 Programming for Blockchain Applications &nbsp;·&nbsp; Group 3 (Team 8888)<br/>
+    Agrawal Somya · Yang Wenshuo · Phua Qiuxuan<br/>
+    Deployed on Sepolia Testnet
+  </div>
+</div>
+
+<!-- TOC -->
+<div class="toc">
+  <h3>Table of Contents</h3>
+  <ol>
+    <li><a href="#overview">Project Overview</a></li>
+    <li><a href="#prereqs">Prerequisites</a></li>
+    <li><a href="#first-run">First-Time Setup &amp; Running the App</a></li>
+    <li><a href="#workflow">Workflow: After Making Code Changes</a>
+      <ol>
+        <li><a href="#only-frontend">Scenario A — Frontend changes only</a></li>
+        <li><a href="#contract-changes">Scenario B — Smart contract changes</a></li>
+      </ol>
+    </li>
+    <li><a href="#github">GitHub Workflow</a></li>
+    <li><a href="#roles">Testing Multiple Roles (Multiple Accounts)</a></li>
+    <li><a href="#ipfs">IPFS — What It Is &amp; How to Upload Evidence</a></li>
+    <li><a href="#architecture">Smart Contract Architecture</a></li>
+    <li><a href="#troubleshooting">Troubleshooting</a></li>
+  </ol>
+</div>
+
+<!-- ─────────────────────────────────────────────────── -->
+<h2 id="overview">1. Project Overview</h2>
+
+<p>
+  <strong>TraceableHands</strong> is a trustless charity donation platform built on Ethereum.
+  Donors contribute USDC stablecoins to a <em>milestone</em>. When the funding goal is reached,
+  50% is automatically released to the vendor. After registered auditors verify real-world
+  delivery (via IPFS evidence), the remaining 50% is released. If the milestone fails, donors
+  can claim a full refund.
+</p>
+
+<table>
+  <tr><th>Layer</th><th>Technology</th></tr>
+  <tr><td>Smart contracts</td><td>Solidity ^0.8.20</td></tr>
+  <tr><td>Development framework</td><td>Hardhat</td></tr>
+  <tr><td>Contract libraries</td><td>OpenZeppelin (ERC-20, ReentrancyGuard)</td></tr>
+  <tr><td>Frontend</td><td>React (Create React App)</td></tr>
+  <tr><td>Blockchain connection</td><td>ethers.js v6</td></tr>
+  <tr><td>Wallet</td><td>MetaMask browser extension</td></tr>
+  <tr><td>Testnet</td><td>Sepolia (Ethereum)</td></tr>
+  <tr><td>File storage</td><td>IPFS (evidence CIDs stored on-chain)</td></tr>
+</table>
+
+<p><strong>State machine:</strong></p>
+<pre>Funding ──(goal reached)──▶ AuditPending ──(votes pass)──▶ Completed
+                                          └──(rejected)───▶ Failed ──▶ (refunds)
+Funding (deadline passed) ──────────────────────────────────────────▶ (refunds)</pre>
+
+<!-- ─────────────────────────────────────────────────── -->
+<h2 id="prereqs">2. Prerequisites</h2>
+
+<p>Install these before you start:</p>
+<ul>
+  <li><strong>Node.js v18+</strong> — <code>node --version</code> to check. Download at nodejs.org.</li>
+  <li><strong>MetaMask</strong> browser extension — metamask.io</li>
+  <li><strong>Alchemy account (free)</strong> — alchemy.com — for a Sepolia RPC URL</li>
+  <li><strong>Git</strong> — git-scm.com</li>
+  <li><strong>Sepolia test ETH</strong> — get from <code>sepoliafaucet.com</code> (free)</li>
+</ul>
+
+<div class="box warn">
+  <p>⚠️ <strong>Never commit your private key or .env file.</strong>
+  The <code>.gitignore</code> already excludes <code>.env</code>, but double-check before every push.</p>
+</div>
+
+<!-- ─────────────────────────────────────────────────── -->
+<h2 id="first-run">3. First-Time Setup &amp; Running the App</h2>
+
+<h3>Step 1 — Clone the repository</h3>
+<pre>git clone https://github.com/YOUR_USERNAME/FT5004-Traceablehands.git
+cd FT5004-Traceablehands</pre>
+
+<h3>Step 2 — Install dependencies</h3>
+<pre># Root (Hardhat + contracts)
+npm install
+
+# Frontend (React)
+cd frontend
+npm install
+cd ..</pre>
+
+<h3>Step 3 — Create environment file</h3>
+<p>Create a file called <code>.env</code> in the project root (not inside <code>frontend/</code>):</p>
+<pre>SEPOLIA_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
+PRIVATE_KEY=your_metamask_wallet_private_key_without_0x_prefix</pre>
+<div class="box info">
+  <p>ℹ️ To find your private key in MetaMask: Account Options → Account Details → Export Private Key. Use this account only for testing — never store real funds in it.</p>
+</div>
+
+<h3>Step 4 — Compile smart contracts</h3>
+<pre>npx hardhat compile</pre>
+<p>This generates ABI files in <code>artifacts/</code>. You'll see <em>Compiled N Solidity files successfully.</em></p>
+
+<h3>Step 5 — Run tests (optional but recommended)</h3>
+<pre>npx hardhat test</pre>
+<p>All tests should show green checkmarks.</p>
+
+<h3>Step 6 — Deploy to Sepolia</h3>
+<pre>npx hardhat run scripts/deploy.js --network sepolia</pre>
+<p>This saves contract addresses to <code>deployed-addresses.json</code> in the project root.</p>
+
+<h3>Step 7 — Copy contract files to frontend</h3>
+<pre>cp deployed-addresses.json frontend/src/contracts/
+cp artifacts/contracts/TraceableHands.sol/TraceableHands.json frontend/src/contracts/
+cp artifacts/contracts/MockUSDC.sol/MockUSDC.json frontend/src/contracts/</pre>
+
+<h3>Step 8 — Start the frontend</h3>
+<pre>cd frontend
+npm start</pre>
+<p>Open <strong>http://localhost:3000</strong> in your browser. MetaMask will auto-prompt to switch to Sepolia.</p>
+
+<!-- ─────────────────────────────────────────────────── -->
+<h2 id="workflow">4. Workflow: After Making Code Changes</h2>
+
+<h3 id="only-frontend">Scenario A — You only changed React frontend code (App.js, CSS, etc.)</h3>
+
+<div class="step-grid">
+  <div class="step-num">1</div><div class="step-body"><p>Save your files.</p></div>
+  <div class="step-num">2</div><div class="step-body"><p>If <code>npm start</code> is already running, the browser hot-reloads automatically — <strong>no extra steps needed.</strong></p></div>
+  <div class="step-num">3</div><div class="step-body"><p>If not running: <code>cd frontend &amp;&amp; npm start</code></p></div>
+  <div class="step-num">4</div><div class="step-body"><p>Commit and push to GitHub (see Section 5).</p></div>
+</div>
+
+<div class="box success">
+  <p>✅ Frontend changes <strong>do not require redeployment</strong> of smart contracts.</p>
+</div>
+
+<hr/>
+
+<h3 id="contract-changes">Scenario B — You changed the smart contract (TraceableHands.sol or MockUSDC.sol)</h3>
+
+<p>Every contract change requires a full redeploy because the deployed bytecode on Sepolia cannot be edited.</p>
+
+<div class="step-grid">
+  <div class="step-num">1</div><div class="step-body">
+    <p><strong>Recompile</strong></p>
+    <pre>npx hardhat compile</pre>
+    <p>Fix any compilation errors before continuing.</p>
+  </div>
+
+  <div class="step-num">2</div><div class="step-body">
+    <p><strong>Run tests</strong></p>
+    <pre>npx hardhat test</pre>
+    <p>Make sure all tests pass. If any fail, fix them before deploying.</p>
+  </div>
+
+  <div class="step-num">3</div><div class="step-body">
+    <p><strong>Redeploy to Sepolia</strong></p>
+    <pre>npx hardhat run scripts/deploy.js --network sepolia</pre>
+    <p>This creates fresh contract instances. The old deployed addresses are now obsolete — do not use them.</p>
+  </div>
+
+  <div class="step-num">4</div><div class="step-body">
+    <p><strong>Copy updated files to frontend</strong></p>
+    <pre>cp deployed-addresses.json frontend/src/contracts/
+cp artifacts/contracts/TraceableHands.sol/TraceableHands.json frontend/src/contracts/
+cp artifacts/contracts/MockUSDC.sol/MockUSDC.json frontend/src/contracts/</pre>
+    <p>This updates the contract ABI and addresses that the React app uses.</p>
+  </div>
+
+  <div class="step-num">5</div><div class="step-body">
+    <p><strong>Restart the frontend</strong></p>
+    <pre>cd frontend
+npm start</pre>
+    <p>Hard refresh the browser (Cmd+Shift+R / Ctrl+Shift+R) to clear cached contract data.</p>
+  </div>
+
+  <div class="step-num">6</div><div class="step-body">
+    <p><strong>Re-setup MetaMask</strong></p>
+    <p>Since new contracts were deployed, you need to get test USDC again from the new MockUSDC contract. Click <em>Get 1000 Test USDC</em> in the app.</p>
+  </div>
+
+  <div class="step-num">7</div><div class="step-body">
+    <p><strong>Commit everything to GitHub</strong></p>
+    <p>Include <code>deployed-addresses.json</code> and the updated ABI JSON files in <code>frontend/src/contracts/</code>.</p>
+  </div>
+</div>
+
+<div class="box warn">
+  <p>⚠️ <strong>Changing a deployed contract is not possible.</strong> Solidity contracts are immutable once deployed. Any logic change = new deployment = new address. Always update <code>deployed-addresses.json</code> after every deploy.</p>
+</div>
+
+<!-- ─────────────────────────────────────────────────── -->
+<h2 id="github">5. GitHub Workflow</h2>
+
+<h3>Daily workflow</h3>
+<pre># Pull latest changes from the team before starting work
+git pull origin main
+
+# Make your changes, then stage and commit
+git add .
+git commit -m "feat: improve UI dashboard layout"
+
+# Push to GitHub
+git push origin main</pre>
+
+<div class="box danger">
+  <p>🚫 <strong>Never commit these files:</strong></p>
+  <ul style="margin:0.5rem 0 0;padding-left:1.25rem;">
+    <li><code>.env</code> — contains your private key</li>
+    <li><code>node_modules/</code> — too large, auto-excluded by <code>.gitignore</code></li>
+  </ul>
+</div>
+
+<h3>What to always commit after a redeploy</h3>
+<ul>
+  <li><code>deployed-addresses.json</code> (root)</li>
+  <li><code>frontend/src/contracts/deployed-addresses.json</code></li>
+  <li><code>frontend/src/contracts/TraceableHands.json</code></li>
+  <li><code>frontend/src/contracts/MockUSDC.json</code></li>
+</ul>
+
+<h3>Recommended commit message format</h3>
+<table>
+  <tr><th>Prefix</th><th>When to use</th></tr>
+  <tr><td><code>feat:</code></td><td>New feature</td></tr>
+  <tr><td><code>fix:</code></td><td>Bug fix</td></tr>
+  <tr><td><code>deploy:</code></td><td>New contract deployment</td></tr>
+  <tr><td><code>style:</code></td><td>UI-only changes</td></tr>
+  <tr><td><code>test:</code></td><td>Adding/modifying tests</td></tr>
+  <tr><td><code>docs:</code></td><td>Documentation updates</td></tr>
+  <tr><td><code>refactor:</code></td><td>Code restructuring, no logic change</td></tr>
+</table>
+
+<!-- ─────────────────────────────────────────────────── -->
+<h2 id="roles">6. Testing Multiple Roles (Multiple Accounts)</h2>
+
+<p>
+  MetaMask supports <strong>multiple accounts under one seed phrase</strong>.
+  Each account has a different wallet address. You can switch between them to
+  simulate every role in the system without needing multiple browsers.
+</p>
+
+<h3>How to create additional accounts</h3>
+<ol>
+  <li>Open MetaMask → click your account icon (top-right circle)</li>
+  <li>Click <strong>Create Account</strong></li>
+  <li>Name it (e.g. "Donor", "Auditor", "Vendor")</li>
+  <li>Repeat for each role you need</li>
+</ol>
+
+<div class="box info">
+  <p>ℹ️ All accounts under the same MetaMask share the same seed phrase (recovery phrase) but have different private keys and addresses. They are independent wallets for all practical purposes.</p>
+</div>
+
+<h3>Suggested test setup</h3>
+<table>
+  <tr><th>Account</th><th>Role to test</th><th>Actions</th></tr>
+  <tr><td>Account 1</td><td>Charity</td><td>Create milestones</td></tr>
+  <tr><td>Account 2</td><td>Donor</td><td>Get test USDC, donate to milestones</td></tr>
+  <tr><td>Account 3</td><td>Auditor</td><td>Register as auditor, upload IPFS evidence, vote</td></tr>
+  <tr><td>Account 4</td><td>Vendor</td><td>Paste this address when creating milestones; receives funds</td></tr>
+</table>
+
+<p>Each account needs a small amount of Sepolia ETH for gas. Get it free from <strong>sepoliafaucet.com</strong>.</p>
+
+<h3>Full end-to-end test flow</h3>
+<div class="step-grid">
+  <div class="step-num">1</div><div class="step-body"><p><strong>Account 1 (Charity)</strong>: Create a milestone with Account 4 as vendor, goal 100 USDC, 30 days.</p></div>
+  <div class="step-num">2</div><div class="step-body"><p><strong>Account 2 (Donor)</strong>: Get 1000 test USDC, donate 100 USDC. Goal is reached → 50 USDC auto-sent to vendor.</p></div>
+  <div class="step-num">3</div><div class="step-body"><p><strong>Account 3 (Auditor)</strong>: Register as auditor. Upload evidence to Pinata/IPFS. Copy the CID.</p></div>
+  <div class="step-num">4</div><div class="step-body"><p><strong>Account 3</strong>: On the milestone in Audit Pending state, paste the CID and click Approve.</p></div>
+  <div class="step-num">5</div><div class="step-body"><p>Once enough votes are cast, the remaining 50 USDC is released to Account 4 (vendor) automatically.</p></div>
+</div>
+
+<!-- ─────────────────────────────────────────────────── -->
+<h2 id="ipfs">7. IPFS — What It Is &amp; How to Upload Evidence</h2>
+
+<h3>What is IPFS?</h3>
+<p>
+  <strong>IPFS (InterPlanetary File System)</strong> is a peer-to-peer storage network.
+  Instead of storing files on a central server (which can go down or be censored),
+  IPFS distributes files across thousands of nodes worldwide.
+</p>
+<p>
+  Every file uploaded to IPFS gets a <strong>CID (Content Identifier)</strong> — a cryptographic
+  hash fingerprint derived from the file's contents. If the file changes by even one byte,
+  the CID changes. This makes it <strong>tamper-proof</strong>: you can always verify the exact
+  file an auditor referenced.
+</p>
+
+<div class="box success">
+  <p>✅ <strong>Why TraceableHands uses IPFS:</strong> When an auditor approves a milestone,
+  they upload photos/receipts to IPFS and store the CID on the Ethereum blockchain. This CID
+  is permanent and publicly verifiable — anyone can retrieve the original evidence at any time,
+  forever. No central server can delete it or swap the files.</p>
+</div>
+
+<h3>Example CID</h3>
+<pre>QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco</pre>
+<p>Access any IPFS file via: <code>https://ipfs.io/ipfs/&lt;CID&gt;</code></p>
+
+<h3>How to upload evidence photos</h3>
+
+<h4>Method 1: Pinata (Recommended — Free, No code needed)</h4>
+<ol>
+  <li>Go to <strong>pinata.cloud</strong> and create a free account</li>
+  <li>Click <strong>Upload</strong> → <strong>File</strong></li>
+  <li>Select your photo, receipt, or any evidence file</li>
+  <li>Click <strong>Upload</strong></li>
+  <li>The file appears in your dashboard with a <strong>CID</strong> (starts with <code>Qm…</code> or <code>bafy…</code>)</li>
+  <li>Copy just the CID (not the full URL) and paste it into the audit form in the app</li>
+</ol>
+
+<h4>Method 2: web3.storage (Alternative — Free)</h4>
+<ol>
+  <li>Go to <strong>web3.storage</strong> and sign in with GitHub</li>
+  <li>Click <strong>Upload Files</strong> and select your file</li>
+  <li>Copy the CID from the dashboard after upload completes</li>
+</ol>
+
+<h4>Method 3: NFT.Storage (Alternative — Free)</h4>
+<ol>
+  <li>Go to <strong>nft.storage</strong> and create an account</li>
+  <li>Click <strong>Upload</strong> and select your file</li>
+  <li>Copy the resulting CID</li>
+</ol>
+
+<h3>Verifying your upload</h3>
+<p>After uploading, paste your CID into a browser:</p>
+<pre>https://ipfs.io/ipfs/YOUR_CID_HERE</pre>
+<p>It may take 1–2 minutes to propagate. Once the file loads, your CID is ready to use.</p>
+
+<div class="box warn">
+  <p>⚠️ <strong>Privacy warning:</strong> IPFS files are public by default. Only upload photos/documents
+  that you are authorised to share publicly. Do not include personal data like full names, ID documents,
+  or financial records unless they are meant to be public evidence.</p>
+</div>
+
+<!-- ─────────────────────────────────────────────────── -->
+<h2 id="architecture">8. Smart Contract Architecture</h2>
+
+<h3>Contracts</h3>
+<table>
+  <tr><th>Contract</th><th>Purpose</th></tr>
+  <tr><td>TraceableHands.sol</td><td>Main platform contract — manages milestones, donations, audits, refunds</td></tr>
+  <tr><td>MockUSDC.sol</td><td>Test ERC-20 token — simulates USDC with a public faucet function</td></tr>
+</table>
+
+<h3>Key functions</h3>
+<table>
+  <tr><th>Function</th><th>Who calls it</th><th>What it does</th></tr>
+  <tr><td><code>createMilestone()</code></td><td>Charity</td><td>Creates a new funding goal</td></tr>
+  <tr><td><code>donate()</code></td><td>Donor</td><td>Transfers USDC to escrow; triggers 50% release at goal</td></tr>
+  <tr><td><code>registerAsAuditor()</code></td><td>Anyone</td><td>Adds caller to auditor pool</td></tr>
+  <tr><td><code>verify()</code></td><td>Auditor</td><td>Casts approve/reject vote; releases final 50% at threshold</td></tr>
+  <tr><td><code>claimRefund()</code></td><td>Donor</td><td>Returns donation if milestone failed or deadline passed</td></tr>
+</table>
+
+<h3>Reputation system</h3>
+<p>
+  Vendor reputation affects how many auditor votes are required:
+</p>
+<table>
+  <tr><th>Reputation Score</th><th>Votes Needed</th><th>Meaning</th></tr>
+  <tr><td>0–1</td><td>3</td><td>New vendor, high oversight</td></tr>
+  <tr><td>2–4</td><td>2</td><td>Some track record</td></tr>
+  <tr><td>5+</td><td>1</td><td>Highly trusted, fast-tracked</td></tr>
+</table>
+
+<!-- ─────────────────────────────────────────────────── -->
+<h2 id="troubleshooting">9. Troubleshooting</h2>
+
+<table>
+  <tr><th>Problem</th><th>Solution</th></tr>
+  <tr><td>MetaMask shows wrong network</td><td>The app auto-prompts to switch to Sepolia. If it fails, manually switch in MetaMask → Networks → Sepolia.</td></tr>
+  <tr><td><code>Contract not deployed to detected network</code></td><td>You're on the wrong network, or <code>deployed-addresses.json</code> is outdated. Re-copy from root after deploy.</td></tr>
+  <tr><td>Transaction fails: "insufficient funds"</td><td>You need Sepolia ETH for gas. Get some at sepoliafaucet.com.</td></tr>
+  <tr><td>USDC balance is 0</td><td>Click <em>Get 1000 Test USDC</em> in the app. Each account needs to do this separately.</td></tr>
+  <tr><td>Audit panel not showing</td><td>You must register as auditor first, and the milestone must be in <em>Audit Pending</em> state.</td></tr>
+  <tr><td>"Already voted" error</td><td>Each auditor can only vote once per milestone. Switch to a different auditor account.</td></tr>
+  <tr><td>IPFS file not loading</td><td>Wait 1–2 minutes for propagation. Try <code>https://gateway.pinata.cloud/ipfs/&lt;CID&gt;</code> as an alternative gateway.</td></tr>
+  <tr><td><code>npx hardhat compile</code> fails</td><td>Run <code>npm install</code> first. Check Node.js version: <code>node --version</code> should be v18+.</td></tr>
+  <tr><td>Frontend not picking up new contract</td><td>Hard refresh: Cmd+Shift+R (Mac) or Ctrl+Shift+R (Windows). Also check that you copied the ABI files correctly.</td></tr>
+</table>
+
+<hr/>
+
+<p style="text-align:center;color:#9ca3af;font-size:12px;margin-top:2rem;">
+  TraceableHands · FT5004 Group 3 (Team 8888) · Sepolia Testnet · 2025
+</p>
+
+</body>
+</html>

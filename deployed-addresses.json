@@ -1,6 +1,6 @@
 {
-  "mockUSDC": "0x9cf20CE824D23a172a4e10E28e72e73Ad4FF9eCf",
-  "traceableHands": "0x289227bE969a933d32B56391B46C32DA3fF8BF4d",
+  "mockUSDC": "0xA5274C37d5E3094F81FF70C089d2a8ddc8b5579b",
+  "traceableHands": "0xbC1100e45382c245803f080A27C6B692F3B55E12",
   "network": "sepolia",
-  "deployedAt": "2026-04-05T17:53:00.844Z"
+  "deployedAt": "2026-04-05T18:02:48.623Z"
 }
