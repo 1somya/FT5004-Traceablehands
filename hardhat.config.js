@@ -13,6 +13,9 @@ module.exports = {
         enabled: true,
         runs: 200,
       },
+      // viaIR enables the new Yul-based compiler pipeline.
+      // Required when structs have many fields (avoids "stack too deep" error).
+      viaIR: true,
     },
   },
   networks: {

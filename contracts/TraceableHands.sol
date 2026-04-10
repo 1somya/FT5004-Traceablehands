@@ -1,112 +1,92 @@
 // SPDX-License-Identifier: MIT
-// This line is a legal requirement for Solidity files.
-// It tells the world this code is open-source under the MIT license.
-
 pragma solidity ^0.8.20;
-// "pragma" means "compiler instruction."
-// This tells Hardhat: "compile this with Solidity version 0.8.20 or higher."
-// The ^ means "compatible with 0.8.20 up to but not including 0.9.0."
 
-// We import two things from OpenZeppelin:
-// 1. IERC20 - an interface (a blueprint) for any ERC-20 token (like USDC).
-//    This lets our contract call functions like transfer() on any ERC-20 token.
-// 2. ReentrancyGuard - a security tool that prevents "reentrancy attacks,"
-//    a common hack where malicious code tries to call our contract
-//    repeatedly before the first call finishes.
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-/// @title TraceableHands - A trustless charity donation platform
-/// @notice Donors donate stablecoins. Funds release to vendors in two stages,
-///         verified by randomly selected auditors.
+/// @title TraceableHands - Trustless charity platform with crowd auditing
+/// @notice Donors fund milestones in escrow. Once the goal is reached, 50% is released
+///         to the vendor immediately. The vendor uploads proof of delivery to IPFS.
+///         Donors then vote to approve, request more proof, or reject. If a majority
+///         approves, the remaining 50% is released. This is crowd auditing — no
+///         trusted third-party auditor is needed.
 contract TraceableHands is ReentrancyGuard {
-    // "is ReentrancyGuard" means our contract inherits all the security
-    // logic from OpenZeppelin's ReentrancyGuard. We just add "nonReentrant"
-    // to any function that moves money.
 
     // =========================================================
     // SECTION 1: DATA STRUCTURES
-    // We define what a "Milestone" looks like in memory.
     // =========================================================
 
-    // An enum is a custom type with a fixed set of named values.
-    // This tracks what stage a milestone is in.
+    /// @dev Tracks what stage a milestone is in.
     enum MilestoneState {
-        Funding,      // 0 - Accepting donations, goal not reached yet
-        AuditPending, // 1 - Goal reached, first 50% sent, waiting for audit
-        Completed,    // 2 - Audit passed, second 50% released
-        Failed,       // 3 - Audit failed OR deadline passed, refunds available
-        Cancelled     // 4 - Charity cancelled before funding started
+        Funding,       // 0 — Accepting donations, goal not reached yet
+        ProofPending,  // 1 — Goal reached, 50% sent, waiting for vendor/charity to upload proof
+        VotingOpen,    // 2 — Proof submitted, donors are now voting
+        Completed,     // 3 — Majority approved, remaining 50% released to vendor
+        Failed,        // 4 — Majority rejected OR max proof rounds exceeded
+        Cancelled      // 5 — Cancelled before funding completed
     }
 
-    // A struct is like a "row" in a database table.
-    // It groups related variables together under one name.
+    /// @dev The three voting options donors can choose from.
+    enum VoteType {
+        Approve,        // 0 — Proof is valid, release remaining funds
+        NeedsMoreProof, // 1 — Proof is insufficient, vendor should resubmit
+        Reject          // 2 — Delivery did not happen, keep remaining funds locked for refund
+    }
+
+    /// @dev Max number of times a vendor can re-submit proof before the milestone fails.
+    uint8 public constant MAX_PROOF_ROUNDS = 3;
+
+    /// @dev Minimum number of donors who must vote before a decision is reached.
+    ///      If fewer than MIN_VOTERS donors exist, all donors must vote.
+    uint256 public constant MIN_VOTERS = 3;
+
     struct Milestone {
-        uint256 id;             // Unique ID for this milestone (0, 1, 2, ...)
-        address charity;        // The wallet address of the charity that created this
-        address vendorAddress;  // The wallet address of the vendor who gets paid
-        string description;     // A text description of what this milestone achieves
-        uint256 goalAmount;     // How many tokens need to be raised (in smallest unit)
-        uint256 currentBalance; // How many tokens have been donated so far
-        uint256 deadline;       // Unix timestamp — if goal not reached by this time, fail
-        MilestoneState state;   // Current stage (Funding, AuditPending, etc.)
-        uint256 auditVotesNeeded; // How many auditor approvals are needed
-        uint256 auditVotesReceived; // How many approvals received so far
-        string evidenceCID;     // IPFS content ID of the audit evidence (e.g., photos)
+        uint256 id;
+        address charity;        // Address that created this milestone
+        address vendorAddress;  // Address that receives the funds
+        string description;
+        uint256 goalAmount;
+        uint256 currentBalance; // Total donated so far
+        uint256 deadline;       // Unix timestamp for fundraising deadline
+        MilestoneState state;
+
+        bool firstPaymentSent;  // True once the first 50% has been sent to vendor
+
+        string proofCID;        // IPFS CID of the vendor's proof of delivery
+        uint8 proofRound;       // How many proof submission rounds have occurred (0-indexed)
+
+        uint256 approveVotes;       // Number of Approve votes this round
+        uint256 needsMoreProofVotes; // Number of NeedsMoreProof votes this round
+        uint256 rejectVotes;        // Number of Reject votes this round
+        uint256 totalVoters;        // Unique voters this round
+
+        uint256 donorCount;     // How many unique addresses have donated
     }
 
     // =========================================================
     // SECTION 2: STATE VARIABLES
-    // These are stored permanently on the blockchain.
-    // Think of them as the database columns.
     // =========================================================
 
-    // The ERC-20 token contract address we accept for donations.
-    // On testnet this will be our mock USDC. On mainnet it would be real USDC.
     IERC20 public donationToken;
-
-    // The owner of this entire platform (the team/deployer).
-    // Only they can do administrative actions.
     address public owner;
-
-    // A counter to give each milestone a unique ID.
-    // Starts at 0, we increment it each time a milestone is created.
     uint256 public milestoneCount;
 
-    // The main storage: maps milestone ID → Milestone struct.
-    // Think of it as: milestones[0] returns the first milestone,
-    // milestones[1] returns the second, etc.
     mapping(uint256 => Milestone) public milestones;
 
-    // Tracks how much each donor has contributed to each milestone.
-    // donorContributions[milestoneId][donorAddress] = amount donated
-    // This is needed to calculate refunds fairly.
+    // How much each donor contributed to each milestone.
+    // donorContributions[milestoneId][donorAddress] = amount
     mapping(uint256 => mapping(address => uint256)) public donorContributions;
 
-    // Tracks which addresses have registered as potential auditors.
-    // Any donor who opts in becomes a potential auditor.
-    mapping(address => bool) public isRegisteredAuditor;
+    // Prevents double-voting. Keyed by milestone, proof round, and voter address.
+    // This resets naturally when proofRound increments — no need to clear old entries.
+    // hasVoted[milestoneId][proofRound][voterAddress] = true/false
+    mapping(uint256 => mapping(uint8 => mapping(address => bool))) public hasVoted;
 
-    // Keeps a list of all registered auditor addresses so we can
-    // randomly pick from them. Mappings can't be iterated, so we
-    // need a separate array for this.
-    address[] public auditorPool;
-
-    // Tracks which auditors have already voted on a specific milestone.
-    // hasVoted[milestoneId][auditorAddress] = true/false
-    // Prevents the same auditor from voting twice.
-    mapping(uint256 => mapping(address => bool)) public hasVoted;
-
-    // The reputation score for each vendor address.
-    // Every successfully completed milestone adds 1 point.
-    // reputationScore[vendorAddress] = score
+    // Vendor reputation: incremented by 1 for each successfully completed milestone.
     mapping(address => uint256) public reputationScore;
 
     // =========================================================
     // SECTION 3: EVENTS
-    // Events are like "notifications" that get logged on the blockchain.
-    // Your React frontend will listen for these to update the UI in real-time.
-    // They are much cheaper than storing data, so we use them for history.
     // =========================================================
 
     event MilestoneCreated(
@@ -124,21 +104,32 @@ contract TraceableHands is ReentrancyGuard {
 
     event GoalReached(
         uint256 indexed milestoneId,
-        uint256 firstPayment // The 50% sent to vendor immediately
+        uint256 firstPayment
     );
 
-    event AuditorRegistered(address indexed auditor);
-
-    event AuditVoteCast(
+    event ProofSubmitted(
         uint256 indexed milestoneId,
-        address indexed auditor,
-        bool approved
+        address indexed submitter,
+        string proofCID,
+        uint8 round
+    );
+
+    event VoteCast(
+        uint256 indexed milestoneId,
+        address indexed voter,
+        VoteType voteType
+    );
+
+    /// @dev Emitted when majority votes NeedsMoreProof and voting resets.
+    event NeedsMoreProofTriggered(
+        uint256 indexed milestoneId,
+        uint8 newRound
     );
 
     event MilestoneCompleted(
         uint256 indexed milestoneId,
         address indexed vendor,
-        uint256 finalPayment // The remaining 50% sent to vendor
+        uint256 finalPayment
     );
 
     event MilestoneFailed(uint256 indexed milestoneId);
@@ -153,28 +144,13 @@ contract TraceableHands is ReentrancyGuard {
 
     // =========================================================
     // SECTION 4: MODIFIERS
-    // Modifiers are reusable conditions. Instead of writing the same
-    // "require" check in every function, we define it once here
-    // and attach it to functions with a keyword.
     // =========================================================
 
-    // Only the platform owner can call functions with this modifier.
     modifier onlyOwner() {
         require(msg.sender == owner, "Only the platform owner can do this");
-        _; // This underscore means "run the rest of the function now"
-    }
-
-    // Only the charity that created a milestone can call functions
-    // with this modifier for that specific milestone.
-    modifier onlyCharity(uint256 _milestoneId) {
-        require(
-            msg.sender == milestones[_milestoneId].charity,
-            "Only the charity that created this milestone can do this"
-        );
         _;
     }
 
-    // Checks that a milestone actually exists before doing anything with it.
     modifier milestoneExists(uint256 _milestoneId) {
         require(_milestoneId < milestoneCount, "This milestone does not exist");
         _;
@@ -182,22 +158,11 @@ contract TraceableHands is ReentrancyGuard {
 
     // =========================================================
     // SECTION 5: CONSTRUCTOR
-    // The constructor runs ONCE when the contract is first deployed.
-    // It sets up the initial state.
     // =========================================================
 
-    /// @param _donationToken The address of the ERC-20 token contract
-    ///        we accept for donations (e.g., USDC contract address)
     constructor(address _donationToken) {
-        // Store the token contract so we can call its functions later.
         donationToken = IERC20(_donationToken);
-
-        // msg.sender is a built-in Solidity variable that always refers to
-        // the wallet address that called the current function.
-        // In the constructor, that's the person deploying the contract.
         owner = msg.sender;
-
-        // Start the milestone counter at 0.
         milestoneCount = 0;
     }
 
@@ -205,155 +170,124 @@ contract TraceableHands is ReentrancyGuard {
     // SECTION 6: CORE FUNCTIONS
     // =========================================================
 
-    /// @notice Creates a new fundraising milestone.
-    /// @param _goalAmount How many tokens (in smallest unit) to raise.
-    ///        For a token with 6 decimals (like USDC), 1 USDC = 1,000,000 units.
-    /// @param _vendorAddress The wallet that receives the funds when goals are met.
-    /// @param _description A human-readable description of what this milestone does.
-    /// @param _durationInDays How many days donors have to reach the goal.
+    /// @notice Anyone can create a fundraising milestone.
     function createMilestone(
         uint256 _goalAmount,
         address _vendorAddress,
         string calldata _description,
         uint256 _durationInDays
     ) external {
-        // "external" means this function can only be called from outside the contract.
-
-        // Input validation — reject bad inputs before wasting gas.
         require(_goalAmount > 0, "Goal amount must be greater than zero");
         require(_vendorAddress != address(0), "Vendor address cannot be the zero address");
         require(bytes(_description).length > 0, "Description cannot be empty");
         require(_durationInDays > 0, "Duration must be at least 1 day");
 
-        // Get the current milestone ID, then increment the counter
-        // so the next milestone gets a different ID.
-        uint256 newId = milestoneCount;
-        milestoneCount++;
-
-        // Calculate the deadline. block.timestamp is the current block's
-        // Unix timestamp (seconds since Jan 1, 1970).
-        // We multiply days by seconds in a day to convert.
+        uint256 newId = milestoneCount++;
         uint256 deadline = block.timestamp + (_durationInDays * 1 days);
 
-        // Determine how many auditors are needed based on the vendor's reputation.
-        // New vendors (score 0) need 3 auditors.
-        // Trusted vendors (score 5+) only need 1 auditor.
-        // This is the reputation system in action.
-        uint256 votesNeeded;
-        uint256 vendorRep = reputationScore[_vendorAddress];
-        if (vendorRep >= 5) {
-            votesNeeded = 1; // Highly trusted vendor, fast-track
-        } else if (vendorRep >= 2) {
-            votesNeeded = 2; // Some track record
-        } else {
-            votesNeeded = 3; // New vendor, need more oversight
-        }
-
-        // Create the Milestone struct and store it in our mapping.
         milestones[newId] = Milestone({
             id: newId,
-            charity: msg.sender,         // The caller becomes the charity owner
+            charity: msg.sender,
             vendorAddress: _vendorAddress,
             description: _description,
             goalAmount: _goalAmount,
-            currentBalance: 0,           // No donations yet
+            currentBalance: 0,
             deadline: deadline,
-            state: MilestoneState.Funding, // Starts in Funding state
-            auditVotesNeeded: votesNeeded,
-            auditVotesReceived: 0,
-            evidenceCID: ""              // Empty until auditor submits
+            state: MilestoneState.Funding,
+            firstPaymentSent: false,
+            proofCID: "",
+            proofRound: 0,
+            approveVotes: 0,
+            needsMoreProofVotes: 0,
+            rejectVotes: 0,
+            totalVoters: 0,
+            donorCount: 0
         });
 
-        // Emit an event so the frontend knows a milestone was created.
         emit MilestoneCreated(newId, msg.sender, _goalAmount, deadline);
     }
 
-    /// @notice Allows a donor to donate tokens to a milestone.
-    /// @dev The donor must first call approve() on the token contract,
-    ///      giving THIS contract permission to move their tokens.
-    ///      This is how ERC-20 tokens work — you approve, then the
-    ///      contract pulls the tokens. (Like authorizing a direct debit.)
-    /// @param _milestoneId Which milestone to donate to.
-    /// @param _amount How many tokens to donate.
+    /// @notice Donate tokens to a milestone.
+    ///         The donor must first call approve() on the token contract.
     function donate(uint256 _milestoneId, uint256 _amount)
         external
-        nonReentrant          // Security: prevents reentrancy attacks
-        milestoneExists(_milestoneId) // Safety: ensures milestone exists
+        nonReentrant
+        milestoneExists(_milestoneId)
     {
         Milestone storage milestone = milestones[_milestoneId];
-        // "storage" means we're pointing to the actual stored data,
-        // not a copy. Changes here affect the blockchain directly.
 
         require(milestone.state == MilestoneState.Funding, "This milestone is not accepting donations");
         require(block.timestamp < milestone.deadline, "Donation deadline has passed");
         require(_amount > 0, "Donation amount must be greater than zero");
 
-        // transferFrom pulls tokens FROM the donor TO this contract.
-        // This only works if the donor has already called approve() on
-        // the token contract. If they haven't, this line will revert.
         bool success = donationToken.transferFrom(msg.sender, address(this), _amount);
         require(success, "Token transfer failed");
 
-        // Update state: record how much this donor contributed (for refunds)
-        // and add to the milestone's total balance.
+        // Track unique donor count
+        if (donorContributions[_milestoneId][msg.sender] == 0) {
+            milestone.donorCount++;
+        }
+
         donorContributions[_milestoneId][msg.sender] += _amount;
         milestone.currentBalance += _amount;
 
         emit DonationReceived(_milestoneId, msg.sender, _amount);
 
-        // Check if the goal has been reached.
         if (milestone.currentBalance >= milestone.goalAmount) {
             _handleGoalReached(_milestoneId);
         }
     }
 
-    /// @dev Internal function called automatically when goal is reached.
-    ///      Internal functions can only be called from within this contract.
-    ///      We prefix them with _ by convention.
+    /// @dev Called internally when a donation pushes the balance to the goal.
+    ///      Sends 50% to vendor immediately and waits for proof submission.
     function _handleGoalReached(uint256 _milestoneId) internal {
         Milestone storage milestone = milestones[_milestoneId];
 
-        // Calculate 50% of the total balance.
-        // We do integer division, so 101 tokens would send 50, not 50.5.
         uint256 firstPayment = milestone.currentBalance / 2;
 
-        // Change state to AuditPending BEFORE sending money.
-        // This is important — always update state before external calls
-        // to prevent reentrancy attacks (Checks-Effects-Interactions pattern).
-        milestone.state = MilestoneState.AuditPending;
+        // Update state BEFORE external call (Checks-Effects-Interactions)
+        milestone.state = MilestoneState.ProofPending;
+        milestone.firstPaymentSent = true;
 
-        // Transfer 50% directly to the vendor immediately.
         bool success = donationToken.transfer(milestone.vendorAddress, firstPayment);
         require(success, "First payment transfer failed");
 
         emit GoalReached(_milestoneId, firstPayment);
     }
 
-    /// @notice Allows any donor to register as a potential auditor.
-    /// @dev We check they've donated to at least something to prevent
-    ///      random people from flooding the auditor pool.
-    function registerAsAuditor() external {
-        require(!isRegisteredAuditor[msg.sender], "Already registered as auditor");
-        // In production you'd check they've donated somewhere.
-        // For MVP we keep this simple.
+    /// @notice The vendor or charity uploads proof of delivery (an IPFS CID).
+    ///         This opens the voting period for donors.
+    /// @param _milestoneId The milestone to submit proof for.
+    /// @param _proofCID The IPFS content ID (e.g., "QmXxx...") of the evidence file.
+    function submitProof(uint256 _milestoneId, string calldata _proofCID)
+        external
+        milestoneExists(_milestoneId)
+    {
+        Milestone storage milestone = milestones[_milestoneId];
 
-        isRegisteredAuditor[msg.sender] = true;
-        auditorPool.push(msg.sender); // Add to the iterable list
+        require(
+            msg.sender == milestone.charity || msg.sender == milestone.vendorAddress,
+            "Only the charity or vendor can submit proof"
+        );
+        require(
+            milestone.state == MilestoneState.ProofPending,
+            "Milestone is not awaiting proof"
+        );
+        require(bytes(_proofCID).length > 0, "Proof CID cannot be empty");
 
-        emit AuditorRegistered(msg.sender);
+        milestone.proofCID = _proofCID;
+        milestone.state = MilestoneState.VotingOpen;
+
+        emit ProofSubmitted(_milestoneId, msg.sender, _proofCID, milestone.proofRound);
     }
 
-    /// @notice An auditor casts their vote on whether a milestone's
-    ///         real-world delivery has been verified.
-    /// @param _milestoneId The milestone being audited.
-    /// @param _approved True if the auditor confirms delivery, false otherwise.
-    /// @param _evidenceCID The IPFS hash of evidence (photos, receipts).
-    ///        This is stored on-chain as a permanent, tamper-proof reference.
-    function verify(
-        uint256 _milestoneId,
-        bool _approved,
-        string calldata _evidenceCID
-    )
+    /// @notice Any donor who contributed to this milestone can vote on the submitted proof.
+    ///         Each address can only vote once per proof round.
+    ///         A majority (>50%) of votes cast decides the outcome.
+    ///         Decisions are checked after MIN_VOTERS have voted.
+    /// @param _milestoneId The milestone to vote on.
+    /// @param _voteType 0=Approve, 1=NeedsMoreProof, 2=Reject
+    function crowdVote(uint256 _milestoneId, VoteType _voteType)
         external
         nonReentrant
         milestoneExists(_milestoneId)
@@ -361,72 +295,101 @@ contract TraceableHands is ReentrancyGuard {
         Milestone storage milestone = milestones[_milestoneId];
 
         require(
-            milestone.state == MilestoneState.AuditPending,
-            "Milestone is not in audit stage"
+            milestone.state == MilestoneState.VotingOpen,
+            "Voting is not open for this milestone"
         );
         require(
-            isRegisteredAuditor[msg.sender],
-            "You are not a registered auditor"
+            donorContributions[_milestoneId][msg.sender] > 0,
+            "Only donors to this milestone can vote"
         );
         require(
-            !hasVoted[_milestoneId][msg.sender],
-            "You have already voted on this milestone"
+            !hasVoted[_milestoneId][milestone.proofRound][msg.sender],
+            "You have already voted in this round"
         );
 
-        // Mark this auditor as having voted so they can't vote again.
-        hasVoted[_milestoneId][msg.sender] = true;
+        hasVoted[_milestoneId][milestone.proofRound][msg.sender] = true;
+        milestone.totalVoters++;
 
-        emit AuditVoteCast(_milestoneId, msg.sender, _approved);
-
-        if (_approved) {
-            milestone.auditVotesReceived++;
-            // Store the evidence CID (the last auditor's evidence wins,
-            // or you could concatenate them — for MVP this is fine).
-            milestone.evidenceCID = _evidenceCID;
-
-            // Check if enough auditors have approved.
-            if (milestone.auditVotesReceived >= milestone.auditVotesNeeded) {
-                _releaseFinalFunds(_milestoneId);
-            }
+        if (_voteType == VoteType.Approve) {
+            milestone.approveVotes++;
+        } else if (_voteType == VoteType.NeedsMoreProof) {
+            milestone.needsMoreProofVotes++;
         } else {
-            // A rejection vote immediately fails the milestone.
-            // In a more complex version you'd require a majority to reject.
-            // For MVP, any rejection fails it.
-            milestone.state = MilestoneState.Failed;
-            emit MilestoneFailed(_milestoneId);
+            milestone.rejectVotes++;
         }
+
+        emit VoteCast(_milestoneId, msg.sender, _voteType);
+        _checkVoteOutcome(_milestoneId);
     }
 
-    /// @dev Internal function to release the remaining 50% after successful audit.
+    /// @dev Checks if a vote majority has been reached after each new vote.
+    ///      Uses "strictly more than half" threshold (>50%).
+    ///      Only evaluates after MIN_VOTERS have voted (or all donors if fewer exist).
+    function _checkVoteOutcome(uint256 _milestoneId) internal {
+        Milestone storage m = milestones[_milestoneId];
+        uint256 totalVotes = m.approveVotes + m.needsMoreProofVotes + m.rejectVotes;
+
+        // Wait until we have enough voters for a meaningful decision.
+        // If there are fewer total donors than MIN_VOTERS, require all of them to vote.
+        uint256 requiredVoters = m.donorCount < MIN_VOTERS ? m.donorCount : MIN_VOTERS;
+        if (totalVotes < requiredVoters) return;
+
+        // Check for strict majority (more than half the votes cast).
+        // Using "* 2 >" instead of "> / 2" avoids integer rounding errors.
+        if (m.approveVotes * 2 > totalVotes) {
+            // Majority approves — release remaining 50% to vendor
+            _releaseFinalFunds(_milestoneId);
+
+        } else if (m.rejectVotes * 2 > totalVotes) {
+            // Majority rejects — mark failed, remaining 50% is refundable
+            m.state = MilestoneState.Failed;
+            emit MilestoneFailed(_milestoneId);
+
+        } else if (m.needsMoreProofVotes * 2 > totalVotes) {
+            // Majority wants more proof
+            if (m.proofRound + 1 >= MAX_PROOF_ROUNDS) {
+                // Max proof rounds exhausted — fail the milestone
+                m.state = MilestoneState.Failed;
+                emit MilestoneFailed(_milestoneId);
+            } else {
+                // Increment round, reset votes, let vendor re-submit
+                // hasVoted entries from old round are ignored automatically
+                // because hasVoted is keyed by (milestoneId, proofRound, address)
+                m.proofRound++;
+                m.approveVotes = 0;
+                m.needsMoreProofVotes = 0;
+                m.rejectVotes = 0;
+                m.totalVoters = 0;
+                m.proofCID = "";
+                m.state = MilestoneState.ProofPending;
+                emit NeedsMoreProofTriggered(_milestoneId, m.proofRound);
+            }
+        }
+        // If no option has a majority yet, voting remains open.
+    }
+
+    /// @dev Releases the remaining 50% to the vendor and marks the milestone complete.
     function _releaseFinalFunds(uint256 _milestoneId) internal {
         Milestone storage milestone = milestones[_milestoneId];
 
-        // The remaining balance in the contract for this milestone.
-        // This is roughly 50% (the half that wasn't sent at goal-reach).
-        // We use currentBalance / 2 to match the first payment calculation,
-        // which handles odd numbers consistently.
         uint256 remainingPayment = milestone.currentBalance / 2;
 
-        // Update state BEFORE sending money (Checks-Effects-Interactions).
         milestone.state = MilestoneState.Completed;
 
-        // Transfer the remaining 50% to the vendor.
         bool success = donationToken.transfer(milestone.vendorAddress, remainingPayment);
         require(success, "Final payment transfer failed");
 
-        // Increment the vendor's reputation score.
         reputationScore[milestone.vendorAddress]++;
-        emit ReputationUpdated(
-            milestone.vendorAddress,
-            reputationScore[milestone.vendorAddress]
-        );
-
+        emit ReputationUpdated(milestone.vendorAddress, reputationScore[milestone.vendorAddress]);
         emit MilestoneCompleted(_milestoneId, milestone.vendorAddress, remainingPayment);
     }
 
-    /// @notice Allows donors to reclaim their donation if a milestone fails
-    ///         or the deadline passes without reaching the goal.
-    /// @param _milestoneId The milestone to claim a refund from.
+    /// @notice Donors claim a refund if:
+    ///         (a) the fundraising deadline passed without reaching the goal, or
+    ///         (b) the crowd voted to reject the delivery.
+    ///
+    ///         IMPORTANT: If the goal was reached and 50% was already sent to the vendor,
+    ///         donors can only recover their proportional share of the remaining 50%.
     function claimRefund(uint256 _milestoneId)
         external
         nonReentrant
@@ -434,8 +397,6 @@ contract TraceableHands is ReentrancyGuard {
     {
         Milestone storage milestone = milestones[_milestoneId];
 
-        // Check if the milestone is eligible for refunds.
-        // Either it officially Failed, or the deadline passed in Funding state.
         bool deadlinePassed = (
             milestone.state == MilestoneState.Funding &&
             block.timestamp >= milestone.deadline
@@ -447,44 +408,34 @@ contract TraceableHands is ReentrancyGuard {
             "This milestone is not eligible for refunds yet"
         );
 
-        // Get how much this specific donor contributed.
         uint256 donorAmount = donorContributions[_milestoneId][msg.sender];
         require(donorAmount > 0, "You have no donations to refund for this milestone");
 
-        // Set to 0 BEFORE transferring (Checks-Effects-Interactions pattern again).
-        // This prevents a donor from calling this twice and draining the contract.
         donorContributions[_milestoneId][msg.sender] = 0;
 
-        // Transfer the refund back to the donor.
-        bool success = donationToken.transfer(msg.sender, donorAmount);
+        // If 50% was already sent to the vendor, only refund the donor's
+        // proportional share of the remaining 50% (= their donation / 2).
+        uint256 refundAmount = milestone.firstPaymentSent ? donorAmount / 2 : donorAmount;
+
+        bool success = donationToken.transfer(msg.sender, refundAmount);
         require(success, "Refund transfer failed");
 
-        emit RefundClaimed(_milestoneId, msg.sender, donorAmount);
+        emit RefundClaimed(_milestoneId, msg.sender, refundAmount);
     }
 
     // =========================================================
     // SECTION 7: VIEW FUNCTIONS
-    // These functions only READ data — they don't change state.
-    // They are FREE to call (no gas cost) because nothing changes.
     // =========================================================
 
-    /// @notice Returns full details of a milestone.
     function getMilestone(uint256 _milestoneId)
         external
         view
         milestoneExists(_milestoneId)
         returns (Milestone memory)
     {
-        // "memory" here means we return a temporary copy, not a reference.
         return milestones[_milestoneId];
     }
 
-    /// @notice Returns how many donors are in the auditor pool.
-    function getAuditorPoolSize() external view returns (uint256) {
-        return auditorPool.length;
-    }
-
-    /// @notice Returns the reputation score of a vendor.
     function getVendorReputation(address _vendor) external view returns (uint256) {
         return reputationScore[_vendor];
     }

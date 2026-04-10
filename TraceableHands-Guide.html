@@ -161,9 +161,10 @@
 <p>
   <strong>TraceableHands</strong> is a trustless charity donation platform built on Ethereum.
   Donors contribute USDC stablecoins to a <em>milestone</em>. When the funding goal is reached,
-  50% is automatically released to the vendor. After registered auditors verify real-world
-  delivery (via IPFS evidence), the remaining 50% is released. If the milestone fails, donors
-  can claim a full refund.
+  50% is automatically released to the vendor. The vendor then uploads proof of delivery to IPFS.
+  All donors who contributed can vote to <strong>Approve</strong>, request <strong>More Proof</strong>,
+  or <strong>Reject</strong> the delivery. A majority decision automatically releases or refunds the
+  remaining 50%. This is <em>crowd auditing</em> — no trusted third-party auditor is needed.
 </p>
 
 <table>
@@ -179,9 +180,15 @@
 </table>
 
 <p><strong>State machine:</strong></p>
-<pre>Funding ──(goal reached)──▶ AuditPending ──(votes pass)──▶ Completed
-                                          └──(rejected)───▶ Failed ──▶ (refunds)
-Funding (deadline passed) ──────────────────────────────────────────▶ (refunds)</pre>
+<pre>Funding ──(goal reached)──▶ ProofPending ──(proof uploaded)──▶ VotingOpen
+                                  ▲                                  │
+                                  │       (needs more proof)         │
+                                  └──────────────────────────────────┤
+                                                                     ▼
+                                              Completed ◀── majority Approve
+                                              Failed    ◀── majority Reject / max rounds
+                                                │
+                                        (refunds available)</pre>
 
 <!-- ─────────────────────────────────────────────────── -->
 <h2 id="prereqs">2. Prerequisites</h2>
@@ -383,21 +390,27 @@ git push origin main</pre>
 <h3>Suggested test setup</h3>
 <table>
   <tr><th>Account</th><th>Role to test</th><th>Actions</th></tr>
-  <tr><td>Account 1</td><td>Charity</td><td>Create milestones</td></tr>
-  <tr><td>Account 2</td><td>Donor</td><td>Get test USDC, donate to milestones</td></tr>
-  <tr><td>Account 3</td><td>Auditor</td><td>Register as auditor, upload IPFS evidence, vote</td></tr>
-  <tr><td>Account 4</td><td>Vendor</td><td>Paste this address when creating milestones; receives funds</td></tr>
+  <tr><td>Account 1</td><td>Charity</td><td>Create milestones; can also submit proof</td></tr>
+  <tr><td>Account 2</td><td>Vendor</td><td>Paste this address when creating milestone; submits IPFS proof; receives funds</td></tr>
+  <tr><td>Account 3</td><td>Donor 1</td><td>Get test USDC, donate, then vote when proof is submitted</td></tr>
+  <tr><td>Account 4</td><td>Donor 2</td><td>Get test USDC, donate, then vote (needed for quorum of 2+)</td></tr>
+  <tr><td>Account 5</td><td>Donor 3</td><td>Optional third voter for full majority testing</td></tr>
 </table>
 
 <p>Each account needs a small amount of Sepolia ETH for gas. Get it free from <strong>sepoliafaucet.com</strong>.</p>
 
 <h3>Full end-to-end test flow</h3>
 <div class="step-grid">
-  <div class="step-num">1</div><div class="step-body"><p><strong>Account 1 (Charity)</strong>: Create a milestone with Account 4 as vendor, goal 100 USDC, 30 days.</p></div>
-  <div class="step-num">2</div><div class="step-body"><p><strong>Account 2 (Donor)</strong>: Get 1000 test USDC, donate 100 USDC. Goal is reached → 50 USDC auto-sent to vendor.</p></div>
-  <div class="step-num">3</div><div class="step-body"><p><strong>Account 3 (Auditor)</strong>: Register as auditor. Upload evidence to Pinata/IPFS. Copy the CID.</p></div>
-  <div class="step-num">4</div><div class="step-body"><p><strong>Account 3</strong>: On the milestone in Audit Pending state, paste the CID and click Approve.</p></div>
-  <div class="step-num">5</div><div class="step-body"><p>Once enough votes are cast, the remaining 50 USDC is released to Account 4 (vendor) automatically.</p></div>
+  <div class="step-num">1</div><div class="step-body"><p><strong>Account 1 (Charity)</strong>: Create a milestone with Account 2 as the vendor address, goal 200 USDC, 30 days.</p></div>
+  <div class="step-num">2</div><div class="step-body"><p><strong>Account 3 (Donor 1)</strong>: Get 1000 test USDC. Donate 100 USDC to the milestone.</p></div>
+  <div class="step-num">3</div><div class="step-body"><p><strong>Account 4 (Donor 2)</strong>: Get 1000 test USDC. Donate 100 USDC. Goal is reached → 100 USDC auto-sent to Account 2 (vendor). Milestone moves to <em>Proof Pending</em>.</p></div>
+  <div class="step-num">4</div><div class="step-body"><p><strong>Account 2 (Vendor)</strong>: Upload delivery photo to Pinata (see Section 7). Copy the CID. On the milestone card, paste the CID and click <strong>Submit Proof &amp; Open Voting</strong>. Milestone moves to <em>Voting Open</em>.</p></div>
+  <div class="step-num">5</div><div class="step-body"><p><strong>Account 3 (Donor 1)</strong>: Review the IPFS proof link. Click <strong>Approve</strong>.</p></div>
+  <div class="step-num">6</div><div class="step-body"><p><strong>Account 4 (Donor 2)</strong>: Review the proof. Click <strong>Approve</strong>. Since both donors (the required quorum) approved, the remaining 100 USDC is automatically sent to Account 2. Milestone is <em>Completed</em>.</p></div>
+</div>
+
+<div class="box info">
+  <p>ℹ️ The minimum voters needed = <code>min(3, total donors)</code>. With 2 donors in this example, both must vote. With 3+ donors, at least 3 must vote before a decision triggers.</p>
 </div>
 
 <!-- ─────────────────────────────────────────────────── -->
@@ -417,10 +430,10 @@ git push origin main</pre>
 </p>
 
 <div class="box success">
-  <p>✅ <strong>Why TraceableHands uses IPFS:</strong> When an auditor approves a milestone,
+  <p>✅ <strong>Why TraceableHands uses IPFS:</strong> When a vendor submits proof of delivery,
   they upload photos/receipts to IPFS and store the CID on the Ethereum blockchain. This CID
   is permanent and publicly verifiable — anyone can retrieve the original evidence at any time,
-  forever. No central server can delete it or swap the files.</p>
+  forever. No central server can delete it or swap the files. Donors can verify the proof before voting.</p>
 </div>
 
 <h3>Example CID</h3>
@@ -477,23 +490,29 @@ git push origin main</pre>
 <h3>Key functions</h3>
 <table>
   <tr><th>Function</th><th>Who calls it</th><th>What it does</th></tr>
-  <tr><td><code>createMilestone()</code></td><td>Charity</td><td>Creates a new funding goal</td></tr>
-  <tr><td><code>donate()</code></td><td>Donor</td><td>Transfers USDC to escrow; triggers 50% release at goal</td></tr>
-  <tr><td><code>registerAsAuditor()</code></td><td>Anyone</td><td>Adds caller to auditor pool</td></tr>
-  <tr><td><code>verify()</code></td><td>Auditor</td><td>Casts approve/reject vote; releases final 50% at threshold</td></tr>
-  <tr><td><code>claimRefund()</code></td><td>Donor</td><td>Returns donation if milestone failed or deadline passed</td></tr>
+  <tr><td><code>createMilestone()</code></td><td>Charity</td><td>Creates a new funding goal on-chain</td></tr>
+  <tr><td><code>donate()</code></td><td>Donor</td><td>Locks USDC in escrow; triggers 50% release when goal is reached</td></tr>
+  <tr><td><code>submitProof()</code></td><td>Vendor or Charity</td><td>Uploads IPFS CID on-chain; opens voting period for donors</td></tr>
+  <tr><td><code>crowdVote()</code></td><td>Donor</td><td>Casts Approve / NeedsMoreProof / Reject vote; auto-resolves on majority</td></tr>
+  <tr><td><code>claimRefund()</code></td><td>Donor</td><td>Returns donor's share if deadline passed or milestone was rejected</td></tr>
+</table>
+
+<h3>Crowd voting rules</h3>
+<table>
+  <tr><th>Rule</th><th>Value</th></tr>
+  <tr><td>Minimum voters before decision</td><td>min(3, total donors)</td></tr>
+  <tr><td>Decision threshold</td><td>Strictly more than 50% of votes cast</td></tr>
+  <tr><td>Max proof re-submission rounds</td><td>3 (then auto-fail)</td></tr>
+  <tr><td>Voting eligibility</td><td>Must have donated to that specific milestone</td></tr>
+  <tr><td>Votes per address per round</td><td>1</td></tr>
 </table>
 
 <h3>Reputation system</h3>
 <p>
-  Vendor reputation affects how many auditor votes are required:
+  Each successfully completed milestone adds +1 to the vendor's on-chain reputation score.
+  This score is permanent and publicly visible on Etherscan. It provides donors with a
+  track record of the vendor before they contribute.
 </p>
-<table>
-  <tr><th>Reputation Score</th><th>Votes Needed</th><th>Meaning</th></tr>
-  <tr><td>0–1</td><td>3</td><td>New vendor, high oversight</td></tr>
-  <tr><td>2–4</td><td>2</td><td>Some track record</td></tr>
-  <tr><td>5+</td><td>1</td><td>Highly trusted, fast-tracked</td></tr>
-</table>
 
 <!-- ─────────────────────────────────────────────────── -->
 <h2 id="troubleshooting">9. Troubleshooting</h2>
@@ -504,8 +523,9 @@ git push origin main</pre>
   <tr><td><code>Contract not deployed to detected network</code></td><td>You're on the wrong network, or <code>deployed-addresses.json</code> is outdated. Re-copy from root after deploy.</td></tr>
   <tr><td>Transaction fails: "insufficient funds"</td><td>You need Sepolia ETH for gas. Get some at sepoliafaucet.com.</td></tr>
   <tr><td>USDC balance is 0</td><td>Click <em>Get 1000 Test USDC</em> in the app. Each account needs to do this separately.</td></tr>
-  <tr><td>Audit panel not showing</td><td>You must register as auditor first, and the milestone must be in <em>Audit Pending</em> state.</td></tr>
-  <tr><td>"Already voted" error</td><td>Each auditor can only vote once per milestone. Switch to a different auditor account.</td></tr>
+  <tr><td>Vote buttons not showing</td><td>You must have donated to that specific milestone. The milestone must be in <em>Voting Open</em> state (proof has been submitted).</td></tr>
+  <tr><td>"Already voted" error</td><td>Each donor can only vote once per proof round. If a new proof round starts (needs-more-proof reset), you can vote again.</td></tr>
+  <tr><td>Proof Pending but vendor can't submit</td><td>Make sure you're connected with the vendor or charity address that was used when the milestone was created.</td></tr>
   <tr><td>IPFS file not loading</td><td>Wait 1–2 minutes for propagation. Try <code>https://gateway.pinata.cloud/ipfs/&lt;CID&gt;</code> as an alternative gateway.</td></tr>
   <tr><td><code>npx hardhat compile</code> fails</td><td>Run <code>npm install</code> first. Check Node.js version: <code>node --version</code> should be v18+.</td></tr>
   <tr><td>Frontend not picking up new contract</td><td>Hard refresh: Cmd+Shift+R (Mac) or Ctrl+Shift+R (Windows). Also check that you copied the ABI files correctly.</td></tr>

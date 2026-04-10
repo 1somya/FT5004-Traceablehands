@@ -5,9 +5,16 @@ import TraceableHandsABI from "./contracts/TraceableHands.json";
 import MockUSDCABI from "./contracts/MockUSDC.json";
 import deployedAddresses from "./contracts/deployed-addresses.json";
 
-const STATE_NAMES  = ["Funding", "Audit Pending", "Completed", "Failed", "Cancelled"];
-const STATE_COLORS = { 0: "#6366f1", 1: "#f59e0b", 2: "#10b981", 3: "#ef4444", 4: "#6b7280" };
-const STATE_BG     = { 0: "#eef2ff", 1: "#fffbeb", 2: "#ecfdf5", 3: "#fef2f2", 4: "#f9fafb" };
+// States match the Solidity enum: Funding(0), ProofPending(1), VotingOpen(2),
+// Completed(3), Failed(4), Cancelled(5)
+const STATE_NAMES  = ["Funding", "Proof Pending", "Voting Open", "Completed", "Failed", "Cancelled"];
+const STATE_COLORS = { 0: "#6366f1", 1: "#f59e0b", 2: "#3b82f6", 3: "#10b981", 4: "#ef4444", 5: "#6b7280" };
+const STATE_BG     = { 0: "#eef2ff", 1: "#fffbeb", 2: "#eff6ff", 3: "#ecfdf5", 4: "#fef2f2", 5: "#f9fafb" };
+
+// VoteType matches Solidity enum
+const VOTE_APPROVE          = 0;
+const VOTE_NEEDS_MORE_PROOF = 1;
+const VOTE_REJECT           = 2;
 
 function progressPct(balance, goal) {
   const pct = (parseFloat(balance) / parseFloat(goal)) * 100;
@@ -25,13 +32,13 @@ export default function App() {
   const [mockUSDC,       setMockUSDC]       = useState(null);
   const [milestones,     setMilestones]     = useState([]);
   const [usdcBalance,    setUsdcBalance]    = useState("0");
-  const [isAuditor,      setIsAuditor]      = useState(false);
   const [vendorRep,      setVendorRep]      = useState("0");
   const [loading,        setLoading]        = useState("");
   const [activeTab,      setActiveTab]      = useState("milestones");
   const [form,           setForm]           = useState({ goal: "", vendor: "", description: "", duration: "30" });
   const [donateAmounts,  setDonateAmounts]  = useState({});
-  const [evidenceCIDs,   setEvidenceCIDs]   = useState({});
+  // For proof submission — keyed by milestoneId
+  const [proofCIDs,      setProofCIDs]      = useState({});
 
   // ── Connect wallet ──────────────────────────────────────────────────────────
   const connectWallet = async () => {
@@ -62,33 +69,54 @@ export default function App() {
 
   const refreshAll = async (th, usdc, address) => {
     await Promise.all([
-      loadMilestones(th), loadBalance(usdc, address),
-      loadAuditorStatus(th, address), loadReputation(th, address),
+      loadMilestones(th, address),
+      loadBalance(usdc, address),
+      loadReputation(th, address),
     ]);
   };
 
-  const loadMilestones = async (th) => {
+  const loadMilestones = async (th, address) => {
     const count = Number(await th.milestoneCount());
     const loaded = [];
     for (let i = 0; i < count; i++) {
       const m = await th.getMilestone(i);
+      const proofRound = Number(m.proofRound);
+      const state = Number(m.state);
+
+      // Load how much this user donated to this milestone
+      const myContrib = await th.donorContributions(i, address);
+
+      // Load whether this user has voted in the current proof round (only matters for VotingOpen)
+      const myVoted = state === 2
+        ? await th.hasVoted(i, proofRound, address)
+        : false;
+
       loaded.push({
-        id: Number(m.id), charity: m.charity, vendor: m.vendorAddress,
-        description: m.description,
-        goal:    ethers.formatUnits(m.goalAmount,     6),
-        balance: ethers.formatUnits(m.currentBalance, 6),
-        state:   Number(m.state),
-        deadline: new Date(Number(m.deadline) * 1000).toLocaleDateString(),
-        votesNeeded: Number(m.auditVotesNeeded), votesReceived: Number(m.auditVotesReceived),
-        evidenceCID: m.evidenceCID,
+        id:           Number(m.id),
+        charity:      m.charity,
+        vendor:       m.vendorAddress,
+        description:  m.description,
+        goal:         ethers.formatUnits(m.goalAmount,     6),
+        balance:      ethers.formatUnits(m.currentBalance, 6),
+        state,
+        deadline:     new Date(Number(m.deadline) * 1000).toLocaleDateString(),
+        firstPaymentSent: m.firstPaymentSent,
+        proofCID:     m.proofCID,
+        proofRound,
+        approveVotes:       Number(m.approveVotes),
+        needsMoreProofVotes: Number(m.needsMoreProofVotes),
+        rejectVotes:        Number(m.rejectVotes),
+        totalVoters:        Number(m.totalVoters),
+        donorCount:         Number(m.donorCount),
+        myContrib:    ethers.formatUnits(myContrib, 6),
+        myVoted,
       });
     }
     setMilestones(loaded);
   };
 
-  const loadBalance      = async (usdc, address) => setUsdcBalance(ethers.formatUnits(await usdc.balanceOf(address), 6));
-  const loadAuditorStatus = async (th, address)   => setIsAuditor(await th.isRegisteredAuditor(address));
-  const loadReputation    = async (th, address)   => setVendorRep((await th.getVendorReputation(address)).toString());
+  const loadBalance   = async (usdc, address) => setUsdcBalance(ethers.formatUnits(await usdc.balanceOf(address), 6));
+  const loadReputation = async (th, address)   => setVendorRep((await th.getVendorReputation(address)).toString());
 
   const handleFaucet = async () => {
     setLoading("Minting 1000 test USDC…");
@@ -110,7 +138,7 @@ export default function App() {
       );
       await tx.wait();
       setForm({ goal: "", vendor: "", description: "", duration: "30" });
-      await loadMilestones(traceableHands);
+      await loadMilestones(traceableHands, account);
       alert("Milestone created!");
     } catch (err) { alert("Error: " + (err.reason || err.message)); }
     setLoading("");
@@ -133,26 +161,29 @@ export default function App() {
     setLoading("");
   };
 
-  const handleRegisterAuditor = async () => {
-    setLoading("Registering as auditor…");
+  // Called by charity or vendor to upload IPFS proof and open voting
+  const handleSubmitProof = async (milestoneId) => {
+    const cid = proofCIDs[milestoneId];
+    if (!cid || cid.trim() === "") { alert("Please enter an IPFS CID before submitting."); return; }
+    setLoading("Submitting proof on-chain…");
     try {
-      const tx = await traceableHands.registerAsAuditor();
+      const tx = await traceableHands.submitProof(milestoneId, cid.trim());
       await tx.wait();
-      setIsAuditor(true);
-      alert("You are now a registered auditor!");
+      await loadMilestones(traceableHands, account);
+      alert("Proof submitted! Donors can now vote.");
     } catch (err) { alert("Error: " + (err.reason || err.message)); }
     setLoading("");
   };
 
-  const handleVote = async (milestoneId, approved) => {
-    const cid = evidenceCIDs[milestoneId] || "";
-    if (approved && !cid) { alert("Please enter an IPFS evidence CID before approving."); return; }
-    setLoading("Casting vote…");
+  // Called by donors to cast a crowd vote
+  const handleCrowdVote = async (milestoneId, voteType) => {
+    const voteLabels = ["Approve", "Needs More Proof", "Reject"];
+    setLoading(`Casting vote: ${voteLabels[voteType]}…`);
     try {
-      const tx = await traceableHands.verify(milestoneId, approved, cid);
+      const tx = await traceableHands.crowdVote(milestoneId, voteType);
       await tx.wait();
-      await loadMilestones(traceableHands);
-      alert("Vote cast!");
+      await loadMilestones(traceableHands, account);
+      alert(`Vote cast: ${voteLabels[voteType]}`);
     } catch (err) { alert("Error: " + (err.reason || err.message)); }
     setLoading("");
   };
@@ -227,8 +258,9 @@ export default function App() {
             {[
               { icon: "💸", title: "1. Donate", desc: "Send USDC to a milestone. Funds lock in escrow." },
               { icon: "🏆", title: "2. Goal Reached", desc: "50% released to the vendor automatically." },
-              { icon: "🔍", title: "3. Audit", desc: "Auditors verify real-world delivery via IPFS evidence." },
-              { icon: "✅", title: "4. Complete", desc: "Remaining 50% released. Vendor earns reputation." },
+              { icon: "📸", title: "3. Vendor Submits Proof", desc: "Vendor uploads delivery evidence to IPFS." },
+              { icon: "🗳", title: "4. Donors Vote", desc: "Every donor votes: Approve, Needs More Proof, or Reject." },
+              { icon: "✅", title: "5. Complete", desc: "Majority approves → remaining 50% released. Vendor earns reputation." },
             ].map(step => (
               <div key={step.title} style={s.stepCard}>
                 <div style={s.stepIcon}>{step.icon}</div>
@@ -253,25 +285,18 @@ export default function App() {
             </div>
 
             <div style={s.statCard}>
-              <p style={s.statLabel}>Auditor Status</p>
-              {isAuditor ? (
-                <p style={{ ...s.statValue, color: "#10b981", fontSize: "1.1rem" }}>✅ Registered</p>
-              ) : (
-                <>
-                  <p style={{ ...s.statValue, color: "#ef4444", fontSize: "1.1rem" }}>Not Registered</p>
-                  <button style={{ ...s.btnSm, marginTop: "0.75rem" }} onClick={handleRegisterAuditor}>
-                    Register as Auditor
-                  </button>
-                </>
-              )}
+              <p style={s.statLabel}>Vendor Reputation</p>
+              <p style={s.statValue}>{vendorRep}</p>
+              <p style={s.statUnit}>completed milestones</p>
             </div>
 
             <div style={s.statCard}>
-              <p style={s.statLabel}>Vendor Reputation</p>
-              <p style={s.statValue}>{vendorRep}</p>
-              <p style={s.statUnit}>points</p>
-              <p style={s.statHint}>
-                {vendorRep >= 5 ? "⚡ Fast-tracked (1 audit)" : vendorRep >= 2 ? "🔶 2 audits needed" : "🔷 3 audits needed"}
+              <p style={s.statLabel}>Your Role</p>
+              <p style={{ fontSize: "13px", color: "#374151", margin: "0 0 0.5rem", lineHeight: "1.6" }}>
+                <strong>Charity/Vendor:</strong> Create milestones, submit proof.
+              </p>
+              <p style={{ fontSize: "13px", color: "#374151", margin: 0, lineHeight: "1.6" }}>
+                <strong>Donor:</strong> Donate and automatically earn voting rights.
               </p>
             </div>
 
@@ -321,6 +346,11 @@ export default function App() {
                     const pct   = progressPct(m.balance, m.goal);
                     const color = STATE_COLORS[m.state];
                     const bg    = STATE_BG[m.state];
+                    const totalVotes = m.approveVotes + m.needsMoreProofVotes + m.rejectVotes;
+
+                    const isCharity = account.toLowerCase() === m.charity.toLowerCase();
+                    const isVendor  = account.toLowerCase() === m.vendor.toLowerCase();
+                    const isDonor   = parseFloat(m.myContrib) > 0;
 
                     return (
                       <div key={m.id} style={s.mCard}>
@@ -352,22 +382,29 @@ export default function App() {
                           <span style={s.metaChip}>📅 {m.deadline}</span>
                           <span style={s.metaChip}>🏭 Vendor: <span style={s.mono}>{truncateAddress(m.vendor)}</span></span>
                           <span style={s.metaChip}>🏛 Charity: <span style={s.mono}>{truncateAddress(m.charity)}</span></span>
-                          {m.state === 1 && (
-                            <span style={s.metaChip}>🗳 Votes: {m.votesReceived}/{m.votesNeeded}</span>
-                          )}
+                          {isDonor && <span style={{ ...s.metaChip, background: "#ecfdf5", borderColor: "#6ee7b7", color: "#065f46" }}>🗳 You donated {m.myContrib} USDC</span>}
+                          {m.firstPaymentSent && <span style={{ ...s.metaChip, background: "#fffbeb", borderColor: "#fcd34d", color: "#92400e" }}>50% sent to vendor</span>}
                         </div>
 
-                        {m.evidenceCID && (
+                        {/* Proof CID display */}
+                        {m.proofCID && (
                           <div style={s.evidenceBadge}>
-                            📎 Evidence on IPFS:{" "}
-                            <a href={"https://ipfs.io/ipfs/" + m.evidenceCID}
-                              target="_blank" rel="noreferrer" style={{ color: "#6366f1" }}>
-                              {m.evidenceCID.slice(0, 24)}…
+                            📎 Proof on IPFS:{" "}
+                            <a href={"https://ipfs.io/ipfs/" + m.proofCID}
+                              target="_blank" rel="noreferrer" style={{ color: "#166534" }}>
+                              {m.proofCID.slice(0, 28)}…
                             </a>
+                            {m.proofRound > 0 && (
+                              <span style={{ marginLeft: "0.5rem", color: "#92400e", fontSize: "11px" }}>
+                                (round {m.proofRound + 1}/{3})
+                              </span>
+                            )}
                           </div>
                         )}
 
-                        {/* ── Actions ── */}
+                        {/* ── ACTIONS ── */}
+
+                        {/* Donate — only when Funding */}
                         {m.state === 0 && (
                           <div style={s.actionBox}>
                             <p style={s.actionLabel}>💸 Donate to this milestone</p>
@@ -385,48 +422,134 @@ export default function App() {
                           </div>
                         )}
 
-                        {m.state === 1 && isAuditor && (
+                        {/* Submit Proof — only when ProofPending AND user is charity or vendor */}
+                        {m.state === 1 && (isCharity || isVendor) && (
                           <div style={s.actionBox}>
-                            <p style={s.actionLabel}>🔍 Cast Audit Vote</p>
+                            <p style={s.actionLabel}>
+                              📸 Submit Proof of Delivery
+                              {m.proofRound > 0 && ` — Round ${m.proofRound + 1} (re-submission)`}
+                            </p>
+                            <p style={{ ...s.hint, margin: "0 0 0.75rem", color: "#374151", fontSize: "13px" }}>
+                              Upload your evidence to IPFS (see IPFS Guide tab) and paste the CID below.
+                              This opens voting for all donors.
+                            </p>
                             <div style={s.fg}>
                               <label style={s.label}>IPFS Evidence CID</label>
                               <input
                                 style={s.input}
                                 type="text"
                                 placeholder="QmXxx… (paste CID from Pinata/web3.storage)"
-                                value={evidenceCIDs[m.id] || ""}
-                                onChange={e => setEvidenceCIDs({ ...evidenceCIDs, [m.id]: e.target.value })}
+                                value={proofCIDs[m.id] || ""}
+                                onChange={e => setProofCIDs({ ...proofCIDs, [m.id]: e.target.value })}
                               />
                               <p style={s.hint}>
-                                Need to upload evidence first?{" "}
+                                Need to upload first?{" "}
                                 <button style={s.textBtn} onClick={() => setActiveTab("ipfs")}>See IPFS Guide →</button>
                               </p>
                             </div>
-                            <div style={s.actionRow}>
-                              <button style={{ ...s.btnPrimary, background: "#10b981", flex: 1 }}
-                                onClick={() => handleVote(m.id, true)}>
-                                ✅ Approve Delivery
-                              </button>
-                              <button style={{ ...s.btnPrimary, background: "#ef4444", flex: 1 }}
-                                onClick={() => handleVote(m.id, false)}>
-                                ❌ Reject Delivery
-                              </button>
-                            </div>
+                            <button style={{ ...s.btnPrimary, width: "100%" }}
+                              onClick={() => handleSubmitProof(m.id)}>
+                              Submit Proof &amp; Open Voting
+                            </button>
                           </div>
                         )}
 
-                        {m.state === 1 && !isAuditor && (
+                        {/* Waiting for proof — shown to non-charity/vendor when ProofPending */}
+                        {m.state === 1 && !isCharity && !isVendor && (
                           <div style={s.infoBox}>
                             <p style={{ margin: 0, fontSize: "13px", color: "#92400e" }}>
-                              ⏳ Awaiting audit votes ({m.votesReceived}/{m.votesNeeded}).
-                              Register as auditor in the sidebar to participate.
+                              ⏳ Waiting for the vendor or charity to upload proof of delivery.
+                              Once uploaded, you will be able to vote.
                             </p>
                           </div>
                         )}
 
-                        {(m.state === 3 || m.state === 4) && (
+                        {/* Crowd Vote — when VotingOpen */}
+                        {m.state === 2 && (
+                          <div style={s.actionBox}>
+                            <p style={s.actionLabel}>🗳 Crowd Audit — Donor Voting</p>
+
+                            {/* Vote tally bar */}
+                            {totalVotes > 0 && (
+                              <div style={{ marginBottom: "1rem" }}>
+                                <div style={{ display: "flex", height: "10px", borderRadius: "999px", overflow: "hidden", marginBottom: "0.4rem" }}>
+                                  <div style={{ width: `${(m.approveVotes / totalVotes) * 100}%`, background: "#10b981" }} />
+                                  <div style={{ width: `${(m.needsMoreProofVotes / totalVotes) * 100}%`, background: "#f59e0b" }} />
+                                  <div style={{ width: `${(m.rejectVotes / totalVotes) * 100}%`, background: "#ef4444" }} />
+                                </div>
+                                <div style={{ display: "flex", gap: "1rem", fontSize: "12px" }}>
+                                  <span style={{ color: "#065f46" }}>✅ Approve: {m.approveVotes}</span>
+                                  <span style={{ color: "#92400e" }}>🔄 Needs more: {m.needsMoreProofVotes}</span>
+                                  <span style={{ color: "#991b1b" }}>❌ Reject: {m.rejectVotes}</span>
+                                </div>
+                                <p style={{ ...s.hint, margin: "0.25rem 0 0" }}>
+                                  {totalVotes} vote{totalVotes !== 1 ? "s" : ""} cast out of {m.donorCount} donor{m.donorCount !== 1 ? "s" : ""}.
+                                  Need majority (&gt;50%) with at least {Math.min(3, m.donorCount)} voters.
+                                </p>
+                              </div>
+                            )}
+
+                            {isDonor && !m.myVoted && (
+                              <>
+                                <p style={{ fontSize: "13px", color: "#374151", margin: "0 0 0.75rem" }}>
+                                  You donated {m.myContrib} USDC to this milestone. Cast your vote:
+                                </p>
+                                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                                  <button
+                                    style={{ ...s.btnPrimary, background: "#059669", flex: 1, minWidth: "120px" }}
+                                    onClick={() => handleCrowdVote(m.id, VOTE_APPROVE)}>
+                                    ✅ Approve
+                                  </button>
+                                  <button
+                                    style={{ ...s.btnPrimary, background: "#d97706", flex: 1, minWidth: "120px" }}
+                                    onClick={() => handleCrowdVote(m.id, VOTE_NEEDS_MORE_PROOF)}>
+                                    🔄 Needs More Proof
+                                  </button>
+                                  <button
+                                    style={{ ...s.btnPrimary, background: "#dc2626", flex: 1, minWidth: "120px" }}
+                                    onClick={() => handleCrowdVote(m.id, VOTE_REJECT)}>
+                                    ❌ Reject
+                                  </button>
+                                </div>
+                                <p style={s.hint}>
+                                  Approve → releases remaining 50% to vendor. &nbsp;
+                                  Needs More Proof → vendor can re-submit (max 3 rounds). &nbsp;
+                                  Reject → milestone fails, you get 50% refund.
+                                </p>
+                              </>
+                            )}
+
+                            {isDonor && m.myVoted && (
+                              <div style={{ ...s.infoBox, marginTop: "0.5rem" }}>
+                                <p style={{ margin: 0, fontSize: "13px", color: "#92400e" }}>
+                                  ✔ You have already voted in this round. Waiting for other donors.
+                                </p>
+                              </div>
+                            )}
+
+                            {!isDonor && (
+                              <div style={{ ...s.infoBox, marginTop: "0.5rem" }}>
+                                <p style={{ margin: 0, fontSize: "13px", color: "#92400e" }}>
+                                  👁 Only donors who contributed to this milestone can vote.
+                                  You did not donate to this milestone.
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Refund — Failed or Cancelled */}
+                        {(m.state === 4 || m.state === 5) && (
                           <div style={s.actionBox}>
                             <p style={s.actionLabel}>💰 Claim Your Refund</p>
+                            {m.firstPaymentSent && (
+                              <div style={{ ...s.infoBox, marginBottom: "0.75rem" }}>
+                                <p style={{ margin: 0, fontSize: "13px", color: "#92400e" }}>
+                                  ⚠️ The first 50% was already sent to the vendor when the goal was reached.
+                                  You can only reclaim your share of the remaining 50%.
+                                </p>
+                              </div>
+                            )}
                             <button style={{ ...s.btnPrimary, background: "#ef4444" }}
                               onClick={() => handleRefund(m.id)}>
                               Claim Refund
@@ -456,8 +579,9 @@ export default function App() {
                 </div>
                 <div style={s.formCard}>
                   <p style={s.formIntro}>
-                    As a charity, create a funding milestone. When the goal is reached, 50% goes to the
-                    vendor immediately. After audit verification, the remaining 50% is released.
+                    Create a fundraising milestone. When the goal is reached, 50% goes to the vendor
+                    immediately. The vendor then uploads proof of delivery. All donors vote to approve,
+                    request more evidence, or reject. A majority decision releases or returns the remaining 50%.
                   </p>
                   <form onSubmit={handleCreate}>
                     <div style={s.formGrid}>
@@ -478,7 +602,6 @@ export default function App() {
                         value={form.vendor} onChange={e => setForm({ ...form, vendor: e.target.value })} required />
                       <p style={s.hint}>
                         Use a different MetaMask account to test the vendor role.
-                        Click the account icon in MetaMask → Create Account.
                       </p>
                     </div>
                     <div style={s.fg}>
@@ -492,18 +615,16 @@ export default function App() {
                   </form>
                 </div>
 
-                {/* Auditor tip */}
                 <div style={s.tipCard}>
                   <h3 style={s.tipTitle}>💡 Testing Multiple Roles</h3>
                   <p style={s.tipText}>
-                    MetaMask supports multiple accounts under the same seed phrase. To simulate different
-                    roles (donor, auditor, charity, vendor):
+                    MetaMask supports multiple accounts under the same seed phrase. To simulate different roles:
                   </p>
                   <ol style={s.tipList}>
-                    <li>Open MetaMask → click your account icon (top right)</li>
-                    <li>Click <strong>Create Account</strong> to add Account 2, Account 3, etc.</li>
-                    <li>Each account gets a different wallet address but shares the same seed phrase</li>
-                    <li>Switch between accounts to test: charity creates milestone → Account 2 donates → Account 3 registers as auditor and votes</li>
+                    <li>Open MetaMask → click your account icon → <strong>Create Account</strong></li>
+                    <li><strong>Account 1 (Charity):</strong> Create the milestone with Account 2 as vendor</li>
+                    <li><strong>Account 2 (Vendor):</strong> Receives 50% automatically; submits IPFS proof</li>
+                    <li><strong>Accounts 3, 4, 5 (Donors):</strong> Donate, then vote when proof is uploaded</li>
                     <li>Each account needs Sepolia ETH for gas — get some from{" "}
                       <a href="https://sepoliafaucet.com" target="_blank" rel="noreferrer" style={{ color: "#6366f1" }}>
                         sepoliafaucet.com
@@ -525,33 +646,18 @@ export default function App() {
                   <h3 style={s.guideSection}>What is IPFS?</h3>
                   <p style={s.guideText}>
                     <strong>IPFS (InterPlanetary File System)</strong> is a decentralized storage network.
-                    Instead of storing files on a central server (like Google Drive), IPFS stores files
-                    across thousands of nodes worldwide.
-                  </p>
-                  <p style={s.guideText}>
                     Every file gets a unique <strong>CID (Content Identifier)</strong> — a hash fingerprint
                     generated from the file's contents. If the file changes even by one pixel, the CID changes.
                     This makes it tamper-proof.
                   </p>
                   <div style={s.exampleBox}>
-                    <p style={{ margin: "0 0 0.5rem", fontSize: "13px", fontWeight: "600", color: "#374151" }}>
+                    <p style={{ margin: "0 0 0.5rem", fontSize: "13px", fontWeight: "600", color: "#a5b4fc" }}>
                       Example CID:
                     </p>
                     <code style={s.code}>QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco</code>
-                    <p style={{ margin: "0.5rem 0 0", fontSize: "12px", color: "#6b7280" }}>
-                      Anyone can access this file via: https://ipfs.io/ipfs/&lt;CID&gt;
-                    </p>
                   </div>
 
-                  <h3 style={s.guideSection}>Why does TraceableHands use IPFS?</h3>
-                  <p style={s.guideText}>
-                    When an auditor approves a milestone, they upload photos/receipts as evidence.
-                    The CID is stored <strong>permanently on the blockchain</strong> — immutable and
-                    publicly verifiable by anyone, forever. This is far better than a link to a Google
-                    Doc that could be deleted or edited.
-                  </p>
-
-                  <h3 style={s.guideSection}>How to upload evidence photos (step-by-step)</h3>
+                  <h3 style={s.guideSection}>How to upload proof photos (step-by-step)</h3>
 
                   <div style={s.methodCard}>
                     <h4 style={s.methodTitle}>Method 1: Pinata (Recommended, Free)</h4>
@@ -560,8 +666,8 @@ export default function App() {
                       <li>Click <strong>Upload</strong> → <strong>File</strong></li>
                       <li>Select your evidence photo(s) or receipt</li>
                       <li>Click <strong>Upload</strong> and wait a few seconds</li>
-                      <li>Your file appears in the list with a CID (starts with <code style={s.inlineCode}>Qm…</code> or <code style={s.inlineCode}>bafy…</code>)</li>
-                      <li>Copy the CID and paste it into the audit form on the Milestones tab</li>
+                      <li>Copy the CID (starts with <code style={s.inlineCode}>Qm…</code> or <code style={s.inlineCode}>bafy…</code>)</li>
+                      <li>Paste it into the proof submission form on the Milestones tab</li>
                     </ol>
                   </div>
 
@@ -569,37 +675,24 @@ export default function App() {
                     <h4 style={s.methodTitle}>Method 2: web3.storage (Alternative, Free)</h4>
                     <ol style={s.methodSteps}>
                       <li>Go to <a href="https://web3.storage" target="_blank" rel="noreferrer" style={{ color: "#6366f1" }}>web3.storage</a> and sign in with GitHub</li>
-                      <li>Click <strong>Upload Files</strong></li>
-                      <li>Select your file and upload</li>
+                      <li>Click <strong>Upload Files</strong>, select your file and upload</li>
                       <li>Copy the CID from the dashboard</li>
                     </ol>
                   </div>
 
-                  <div style={s.methodCard}>
-                    <h4 style={s.methodTitle}>Method 3: NFT.Storage (Alternative, Free)</h4>
-                    <ol style={s.methodSteps}>
-                      <li>Go to <a href="https://nft.storage" target="_blank" rel="noreferrer" style={{ color: "#6366f1" }}>nft.storage</a> and create an account</li>
-                      <li>Click <strong>Upload</strong> and choose your file</li>
-                      <li>Copy the resulting CID</li>
-                    </ol>
-                  </div>
-
                   <h3 style={s.guideSection}>Verifying your uploaded file</h3>
-                  <p style={s.guideText}>
-                    After uploading, verify it's accessible by visiting:
-                  </p>
                   <div style={s.exampleBox}>
                     <code style={s.code}>https://ipfs.io/ipfs/YOUR_CID_HERE</code>
                   </div>
                   <p style={s.guideText}>
-                    It may take 1–2 minutes for the file to propagate across IPFS nodes.
-                    Once confirmed, paste just the CID (not the full URL) into the audit form.
+                    It may take 1–2 minutes for the file to propagate. Once confirmed, paste just the CID
+                    (not the full URL) into the proof form.
                   </p>
 
                   <div style={{ ...s.infoBox, marginTop: "1.5rem" }}>
                     <p style={{ margin: 0, fontSize: "13px", color: "#92400e" }}>
-                      ⚠️ <strong>Important:</strong> IPFS files are public. Only upload photos that you
-                      are allowed to share publicly. Do not include personal data that should remain private.
+                      ⚠️ <strong>Important:</strong> IPFS files are public. Only upload content you
+                      are allowed to share publicly.
                     </p>
                   </div>
                 </div>
@@ -640,13 +733,13 @@ const s = {
   spinner:     {},
 
   // Landing
-  landing:     { maxWidth: "900px", margin: "0 auto", padding: "3rem 1.5rem" },
+  landing:     { maxWidth: "960px", margin: "0 auto", padding: "3rem 1.5rem" },
   landingCard: { background: "#fff", borderRadius: "16px", padding: "3rem", textAlign: "center", boxShadow: "0 4px 24px rgba(0,0,0,0.08)", marginBottom: "3rem" },
   landingTitle:  { fontSize: "1.75rem", fontWeight: "700", margin: "0 0 1rem", color: "#1e1b4b" },
   landingDesc:   { color: "#6b7280", fontSize: "15px", lineHeight: "1.7", maxWidth: "520px", margin: "0 auto 2rem" },
   connectBtnLg:  { background: "linear-gradient(135deg, #4f46e5, #7c3aed)", color: "#fff", border: "none", borderRadius: "10px", padding: "0.9rem 2.5rem", fontSize: "16px", fontWeight: "600", cursor: "pointer" },
   landingHint:   { color: "#9ca3af", fontSize: "12px", marginTop: "1rem" },
-  stepsGrid:   { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "1rem" },
+  stepsGrid:   { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "1rem" },
   stepCard:    { background: "#fff", borderRadius: "12px", padding: "1.5rem", textAlign: "center", boxShadow: "0 2px 8px rgba(0,0,0,0.06)" },
   stepIcon:    { fontSize: "2rem", marginBottom: "0.75rem" },
   stepTitle:   { fontWeight: "600", fontSize: "14px", margin: "0 0 0.5rem", color: "#1e1b4b" },
